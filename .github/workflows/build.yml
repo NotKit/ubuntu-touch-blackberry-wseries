@@ -1,0 +1,80 @@
+name: Build Ubuntu Touch images
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install build tools/dependencies
+        run: |
+          sudo apt update
+          sudo apt install android-tools-mkbootimg bc bison build-essential ca-certificates cpio curl device-tree-compiler fakeroot flex git kmod libssl-dev libtinfo5 python2 sudo unzip wget xz-utils zstd -y --no-install-recommends
+          sudo ln -sf /usr/bin/python2 /usr/bin/python
+
+      - name: Build device tarball
+        run: |
+          ./build.sh -b workdir
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-tarball
+          path: out/device_wseries.tar.xz
+
+  devel-flashable:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download device tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: device-tarball
+          path: out
+
+      - name: Install build tools/dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y fakeroot git img2simg jq sudo wget xz-utils
+
+      - name: Clone halium-generic-adaptation-build-tools
+        run: git clone https://github.com/NotKit/halium-generic-adaptation-build-tools.git -b wseries build
+
+      - name: Prepare fake OTA update
+        run: |
+          ./build/prepare-fake-ota.sh out/device_wseries.tar.xz workdir/fake-ota
+
+      - name: Create flashable images
+        run: |
+          mkdir -p out
+          fakeroot ./build/system-image-from-ota.sh workdir/fake-ota/ubuntu_command out
+          mv out/rootfs.img out/ubuntu.img
+          zstd -T0 out/ubuntu.img
+
+      - name: Upload flashable images to artifacts
+        if: ${{ ! startsWith(github.ref, 'refs/tags/') }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: images-wseries-noble
+          path: |
+            out/boot.img
+            out/ubuntu.img.zst
+            out/device_wseries.tar.xz
+
+      - name: Release flashable images
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        run: |
+            mv out/ubuntu.img.zst ubuntu-wseries.img.zst
+            mv out/boot.img boot-wseries.img
+            gh release create ${{ github.ref_name }} ubuntu-wseries.img.zst boot-wseries.img || \
+                gh release upload ${{ github.ref_name }} ubuntu-wseries.img.zst boot-wseries.img --clobber
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
