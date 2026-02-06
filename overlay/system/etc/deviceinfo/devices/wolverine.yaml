@@ -5,3 +5,4 @@ wolverine:
   GridUnit: 21
   SupportedOrientations:
     - Portrait
+  PulseaudioModulesDroid_ExtraCardArgs: "rate=48000"
